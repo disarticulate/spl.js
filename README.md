@@ -209,10 +209,10 @@ Read a SQL script with multiple statements.
 
 Import a database into the current database. This is using SQLite's backup API.
 
-### `.save`([`dest`: string]) -> `DB` | ArrayBuffer
+### `.save`([`dest`: string]) -> `DB` | ArrayBuffer 
 
 Export the current database. This is using SQLite's backup API.
-If `dest` is undefined or empty an ArrayBuffer is returned.
+If `dest` **Node Only** is undefined or empty an ArrayBuffer is returned.
 
 ### `.close`() -> `SPL`
 
