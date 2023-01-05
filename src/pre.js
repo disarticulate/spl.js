@@ -61,7 +61,8 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
             node.size = contents.size;
             node.contents = contents;
         } else if (contents instanceof ShareArrayBuffer) {
-            node.size = contents.byteLength;
+            // node.size = contents.byteLength;
+            // implement XHR for SAB/Atomics
             node.contents = contents;
         } else { // must be a string/url
             assert(typeof(contents) === 'string');
