@@ -27,7 +27,7 @@ const stream_ops_read = (stream, buffer, offset, length, position) => {
     } else if (stream.node.contents instanceof ShareArrayBuffer) {
         const sab = new Uint8Array(stream.node.contents)
         // header:
-        //  -- readyState Uint8Array(8)
+        //  -- readyState Uint8Array(1)
         //  -- length Uint8Array(8)
         //  -- offset Uint8Array(8)
         // NO OOP
