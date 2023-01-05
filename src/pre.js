@@ -84,7 +84,13 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
 };
 
 class SAB {
-    
+    // header:
+    //  -- readyState Uint8Array(1)
+    //  -- length Uint8Array(8)
+    //  -- pos Uint8Array(8)
+    static READY_STATE_RANGE = [0,1]
+    static HEADER_REQUEST_POS = [1,8]
+    static HEADER_REQUEST_LEN = [8,16]
     constructor(sab) {
         this._size = 0;
         this.expected_pos = 0;
