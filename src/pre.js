@@ -61,8 +61,9 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
             node.size = contents.size;
             node.contents = contents;
         } else if (contents instanceof ShareArrayBuffer) {
-            // node.size = contents.byteLength;
-            // implement XHR for SAB/Atomics
+            // implement SAB with same API as XHR
+            node.sab = new SAB(contents);
+            node.size = node.sab.size();
             node.contents = contents;
         } else { // must be a string/url
             assert(typeof(contents) === 'string');
@@ -82,6 +83,18 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
     return node;
 };
 
+class SAB {
+    
+    constructor(sab) {
+        this._size = 0;
+        this.expected_pos = 0;
+        this.prefetch_len = 0;
+        this.buffer = new ArrayBuffer();
+        #this.header = new ArrayBuffer();
+        this.pos = 0;
+        this.sab = sab;
+    }
+}
 
 class XHR {
 
