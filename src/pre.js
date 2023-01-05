@@ -24,7 +24,19 @@ const stream_ops_read = (stream, buffer, offset, length, position) => {
         var ab = WORKERFS.reader.readAsArrayBuffer(chunk);
         buffer.set(new Uint8Array(ab), offset);
         return chunk.size;
-    } else {
+    } else if (stream.node.contents instanceof ShareArrayBuffer) {
+        const sab = new Uint8Array(stream.node.contents)
+        // header:
+        //  -- readyState Uint8Array(8)
+        //  -- length Uint8Array(8)
+        //  -- offset Uint8Array(8)
+        // NO OOP
+        // Expect Uint8Array with 
+        // ? Atomics.wait(stream.node.contents, 0, 255, 100)
+        // read data when stream is ready
+        // ? const data = new Uint8Array(stream.node.contents.slice(1))
+    }
+    else {
         const data = new Uint8Array(stream.node.xhr.read(position, length));
         if (!data) {
             throw new Error(`Fetching range from ${stream.node.contents} failed.`);
@@ -47,6 +59,9 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
     if (mode === WORKERFS.FILE_MODE) {
         if (contents instanceof Blob || contents instanceof File) {
             node.size = contents.size;
+            node.contents = contents;
+        } else if (contents instanceof ShareArrayBuffer) {
+            node.size = contents.byteLength;
             node.contents = contents;
         } else { // must be a string/url
             assert(typeof(contents) === 'string');
