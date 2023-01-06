@@ -122,6 +122,11 @@ class SAB {
         let retry = 0;
         let size = -1;
         const int32 = new Int32Array(this.sab);
+        
+        // we should zero out the size prior to request?
+        const zeros = new Int32Array(new BigUint64Array([BigInt(0)]).buffer)
+        zeros.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = i))
+        
         // userLand should be:
         // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
         // -- const { async, value } = Atomics.waitAsync(int32, 0, SAB.READY_STATE_REQUEST_SIZE)
@@ -129,24 +134,26 @@ class SAB {
         // userLand should reply:
         // -- const int32 = new Int32Array(sab);
         // -- const size = new Int32Array(new BigUint64Array([BigInt(...fileSize...)]).buffer)
-        // size.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = i))
+        // -- size.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = i))
         // -- int32[0] = SAB.READY_STATE_REQUEST_COMPLETED
         // this is blocking the thread in the worker
-        Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout)
-        //now get the size from the SAB.
-        const uint64 = new BigUint64Array(this.sab)
-        const size = uint64[SAB.HEADER_REQUEST_LEN_U64]
-        
-        
-        this.xhr.onload = () => {
-            size = +this.xhr.getResponseHeader('Content-Length');
-        };
-        do {
+         do {
             retry += 1;
-            this.xhr.open('HEAD', this.url, false);
-            this.xhr.send(null);
-        } while (retry < 3 && this.xhr.status != 200)
-        this._size = size;
+            // now get the size from the SAB.
+            // NOTE: We're reusing the length space of the header
+            // as we have a clear signal request: SAB.READY_STATE_REQUEST_SIZE
+            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout)
+            // we can probably reuse the int32; not sure it matters?
+            // this just reads clearer.
+            const uint64 = new BigUint64Array(this.sab)
+            size = uint64[SAB.HEADER_REQUEST_LEN_U64]
+            // there no status to check so wed recheck the size > 0
+            // try 3 times
+        } while (retry <= 3 && size === 0)
+        // if size is still 0, set to -1
+        // I think we can agree 0 is not a valid file size
+        // one could probably figure out the minimum valid and use that as a constant
+        this._size = size || -1;
         return size;
     }
 }
