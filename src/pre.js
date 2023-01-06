@@ -83,22 +83,71 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
     return node;
 };
 
+// BigInt header positions (allows space and makes it easier to reason about)
+// Int32Array required to communicate with SharedArrayBuffer
+// Uint8Array reqiored to pass into buffer
+const READY_STATE_U64 = 0
+const HEADER_REQUEST_LEN_U64 = 1
+const HEADER_REQUEST_POS_U64 = 2
+
 class SAB {
     // header:
-    //  -- readyState Uint8Array(1)
-    //  -- length Uint8Array(8)
-    //  -- pos Uint8Array(8)
-    static READY_STATE_RANGE = [0,1]
-    static HEADER_REQUEST_POS = [1,8]
-    static HEADER_REQUEST_LEN = [8,16]
+    //  -- readyState Uint8Array(8) = BigUint64Array(1) = Int32Array(2)
+    static READY_STATE_U64 = READY_STATE_U64 // for BigUint64Array
+    static READY_STATE_REQUEST_COMPLETED = 0 // multiples of 4 = Int32Array(1)
+    static READY_STATE_REQUEST_SIZE = 4 // multiples of 4 = Int32Array = Int32Array(2)
+    static READY_STATE_REQUEST_RANGE = 8 // multiples of 4 = Int32Array = Int32Array(3)
+
+    //  -- length/size Uint8Array(8) = BigUint64Array(1) = Int32Array(2)    
+    static HEADER_REQUEST_LEN_U64 = (HEADER_REQUEST_LEN_U64) // for BigUint64Array
+    static HEADER_REQUEST_LEN_I32 = (HEADER_REQUEST_LEN_U64) * 2 // Int32Array
+    static HEADER_REQUEST_LEN_U8 = (HEADER_REQUEST_LEN_U64) * 8 // Uint8Array
+
+    //  -- position (offset) Uint8Array(8) = BigUint64Array(1) = Int32Array(2)    
+    static HEADER_REQUEST_POS_U64 = HEADER_REQUEST_POS_U64 // for BigUint64Array
+    static HEADER_REQUEST_POS_I32 = HEADER_REQUEST_POS_U64 * 2 // for Int32Array
+    static HEADER_REQUEST_POS_U8 = HEADER_REQUEST_POS_U64 * 8 // for Uint8Array
+
     constructor(sab) {
+        this.timeout = 1000 * 60 // Not sure how quickly a response to expect; infinity if not set!
         this._size = 0;
         this.expected_pos = 0;
         this.prefetch_len = 0;
         this.buffer = new ArrayBuffer();
-        #this.header = new ArrayBuffer();
+        // this.header = new ArrayBuffer();
         this.pos = 0;
         this.sab = sab;
+    }
+    size() {
+        let retry = 0;
+        let size = -1;
+        const int32 = new Int32Array(this.sab);
+        // userLand should be:
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
+        // -- const { async, value } = Atomics.waitAsync(int32, 0, SAB.READY_STATE_REQUEST_SIZE)
+        int32[0] = SAB.READY_STATE_REQUEST_SIZE
+        // userLand should reply:
+        // -- const int32 = new Int32Array(sab);
+        // -- const size = new Int32Array(new BigUint64Array([BigInt(...fileSize...)]).buffer)
+        // size.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = i))
+        // -- int32[0] = SAB.READY_STATE_REQUEST_COMPLETED
+        // this is blocking the thread in the worker
+        Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout)
+        //now get the size from the SAB.
+        const uint64 = new BigUint64Array(this.sab)
+        const size = uint64[SAB.HEADER_REQUEST_LEN_U64]
+        
+        
+        this.xhr.onload = () => {
+            size = +this.xhr.getResponseHeader('Content-Length');
+        };
+        do {
+            retry += 1;
+            this.xhr.open('HEAD', this.url, false);
+            this.xhr.send(null);
+        } while (retry < 3 && this.xhr.status != 200)
+        this._size = size;
+        return size;
     }
 }
 
