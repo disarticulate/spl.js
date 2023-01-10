@@ -83,17 +83,19 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
     return node;
 };
 
-// BigInt header positions (allows space and makes it easier to reason about)
+// BigInt/BigUint64Array header positions (allows space and makes it easier to reason about)
 // Int32Array required to communicate with SharedArrayBuffer
 // Uint8Array reqiored to pass into buffer
 const READY_STATE_U64 = 0
 const HEADER_REQUEST_LEN_U64 = 1
 const HEADER_REQUEST_POS_U64 = 2
 
+
 class SAB {
     // header:
     //  -- readyState Uint8Array(8) = BigUint64Array(1) = Int32Array(2)
     static READY_STATE_U64 = READY_STATE_U64 // for BigUint64Array
+    static READY_STATE_I32 = READY_STATE_U64 * 2
     static READY_STATE_REQUEST_COMPLETED = 0 // multiples of 4 = Int32Array(1)
     static READY_STATE_REQUEST_SIZE = 4 // multiples of 4 = Int32Array = Int32Array(2)
     static READY_STATE_REQUEST_RANGE = 8 // multiples of 4 = Int32Array = Int32Array(3)
@@ -118,14 +120,19 @@ class SAB {
         this.pos = 0;
         this.sab = sab;
     }
+    zeroSize (int32) {
+        const zeros = new Int32Array(new BigUint64Array([BigInt(0)]).buffer)
+        zeros.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = 0))
+    }
     size() {
         let retry = 0;
         let size = -1;
         const int32 = new Int32Array(this.sab);
         
-        // we should zero out the size prior to request?
-        const zeros = new Int32Array(new BigUint64Array([BigInt(0)]).buffer)
-        zeros.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = i))
+        // should we wait for it to be ready?
+        Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout)
+        // should we zero out the size prior to request?
+        this.zeroSize(int32)
         
         // userLand should be:
         // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
@@ -149,12 +156,25 @@ class SAB {
             size = uint64[SAB.HEADER_REQUEST_LEN_U64]
             // there no status to check so wed recheck the size > 0
             // try 3 times
-        } while (retry <= 3 && size === 0)
-        // if size is still 0, set to -1
-        // I think we can agree 0 is not a valid file size
+        } while (retry <= 3 && size === BigInt(0))
+        // if size is still 0n, set to -1
+        // I think we can agree 0n is not a valid file size
         // one could probably figure out the minimum valid and use that as a constant
-        this._size = size || -1;
+        this._size = parseInt(size) || -1;
         return size;
+    }
+    fetch(pos, len) {
+        let buffer = null;
+        let retry = 0;
+        const int32 = new Int32Array(this.sab);
+        do {
+            retry += 1;
+            
+            this.xhr.open('GET', this.url, false);
+            this.xhr.setRequestHeader('Range', `bytes=${pos}-${Math.min(this._size - 1, pos + len - 1)}`);
+            this.xhr.send(null);
+        } while (retry < 3 && this.xhr.status != 206);
+        return buffer;
     }
 }
 
