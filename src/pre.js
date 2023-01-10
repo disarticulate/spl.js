@@ -89,13 +89,13 @@ const createNode = (parent, name, mode, dev, contents, mtime) => {
 const READY_STATE_U64 = 0
 const HEADER_REQUEST_LEN_U64 = 1
 const HEADER_REQUEST_POS_U64 = 2
-
+const HEADER_REQUEST_BUF_U64 = 3
 
 class SAB {
     // header:
     //  -- readyState Uint8Array(8) = BigUint64Array(1) = Int32Array(2)
     static READY_STATE_U64 = READY_STATE_U64 // for BigUint64Array
-    static READY_STATE_I32 = READY_STATE_U64 * 2
+    static READY_STATE_I32 = READY_STATE_U64 * 2 // STILL zero, today.
     static READY_STATE_REQUEST_COMPLETED = 0 // multiples of 4 = Int32Array(1)
     static READY_STATE_REQUEST_SIZE = 4 // multiples of 4 = Int32Array = Int32Array(2)
     static READY_STATE_REQUEST_RANGE = 8 // multiples of 4 = Int32Array = Int32Array(3)
@@ -110,6 +110,10 @@ class SAB {
     static HEADER_REQUEST_POS_I32 = HEADER_REQUEST_POS_U64 * 2 // for Int32Array
     static HEADER_REQUEST_POS_U8 = HEADER_REQUEST_POS_U64 * 8 // for Uint8Array
 
+    // -- buffer (offset)
+    static HEADER_REQUEST_BUF_U64 = (HEADER_REQUEST_BUF_U64)
+    static HEADER_REQUEST_BUF_I32 = (HEADER_REQUEST_BUF_U64) * 2
+    
     constructor(sab) {
         this.timeout = 1000 * 60 // Not sure how quickly a response to expect; infinity if not set!
         this._size = 0;
@@ -120,28 +124,35 @@ class SAB {
         this.pos = 0;
         this.sab = sab;
     }
-    zeroSize (int32) {
+    reset (int32) {
+        int32.map((_, i) => (int32[i] = 0))
+    }
+    zeroLen (int32) {
         const zeros = new Int32Array(new BigUint64Array([BigInt(0)]).buffer)
-        zeros.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = 0))
+        zeros.map((_, i) => (int32[SAB.HEADER_REQUEST_LEN_I32 + i] = 0))
+    }
+    zeroPos (int32) {
+        const zeros = new Int32Array(new BigUint64Array([BigInt(0)]).buffer)
+        zeros.map((_, i) => (int32[SAB.HEADER_REQUEST_POS_I32 + i] = 0))
     }
     size() {
         let retry = 0;
         let size = -1;
         const int32 = new Int32Array(this.sab);
         
-        // should we wait for it to be ready?
-        Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout)
-        // should we zero out the size prior to request?
-        this.zeroSize(int32)
-        
-        // userLand should be:
-        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
+        // should we wait for it to be ready? Is there a race condition?
+        Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
+        // should we zero out the len prior to request? or Reset buffer?
+        // this.zeroLen(int32)
+        this.reset(int32);
+        // userLand should be preaped:
+        // -- https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
         // -- const { async, value } = Atomics.waitAsync(int32, 0, SAB.READY_STATE_REQUEST_SIZE)
-        int32[0] = SAB.READY_STATE_REQUEST_SIZE
+        int32[0] = SAB.READY_STATE_REQUEST_SIZE;
         // userLand should reply:
         // -- const int32 = new Int32Array(sab);
         // -- const size = new Int32Array(new BigUint64Array([BigInt(...fileSize...)]).buffer)
-        // -- size.map((i, pos) => (int32[SAB.HEADER_REQUEST_LEN_I32 + pos] = i))
+        // -- size.map((int, i) => (int32[SAB.HEADER_REQUEST_LEN_I32 + i] = int))
         // -- int32[0] = SAB.READY_STATE_REQUEST_COMPLETED
         // this is blocking the thread in the worker
          do {
@@ -149,14 +160,14 @@ class SAB {
             // now get the size from the SAB.
             // NOTE: We're reusing the length space of the header
             // as we have a clear signal request: SAB.READY_STATE_REQUEST_SIZE
-            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout)
+            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
             // we can probably reuse the int32; not sure it matters?
             // this just reads clearer.
-            const uint64 = new BigUint64Array(this.sab)
-            size = uint64[SAB.HEADER_REQUEST_LEN_U64]
+            const uint64 = new BigUint64Array(this.sab);
+            size = uint64[SAB.HEADER_REQUEST_LEN_U64];
             // there no status to check so wed recheck the size > 0
             // try 3 times
-        } while (retry <= 3 && size === BigInt(0))
+        } while (retry <= 3 && size === BigInt(0));
         // if size is still 0n, set to -1
         // I think we can agree 0n is not a valid file size
         // one could probably figure out the minimum valid and use that as a constant
@@ -169,11 +180,39 @@ class SAB {
         const int32 = new Int32Array(this.sab);
         do {
             retry += 1;
-            
-            this.xhr.open('GET', this.url, false);
-            this.xhr.setRequestHeader('Range', `bytes=${pos}-${Math.min(this._size - 1, pos + len - 1)}`);
-            this.xhr.send(null);
-        } while (retry < 3 && this.xhr.status != 206);
+            // prep pos & len arrays
+            const posIntI32 = new Int32Array(new BigUint64Array([BigInt(pos)]).buffer)
+            const lenIntI32 = new Int32Array(new BigUint64Array([BigInt(len)]).buffer)
+            // wait for completed/unused
+            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
+            // reseting the buffer; do we need to signal this?
+            this.reset(int32);
+            // mapping the requested pos & len
+            posIntI32.map((int, i) => (int32[SAB.HEADER_REQUEST_POS_I32 + i] = int));
+            lenIntI32.map((int, i) => (int32[SAB.HEADER_REQUEST_LEN_I32 + i] = int));
+            int32[0] = SAB.READY_STATE_REQUEST_RANGE;
+            // Userland:
+            // -- const int32 = new Int32Array(sab);
+            // -- const { async, value } = Atomics.waitAsync(int32, 0, SAB.READY_STATE_REQUEST_RANGE)
+            // -- const uint64 = new BigUint64Array(int32.buffer)
+            // -- const pos = parseInt(uint64[HEADER_REQUEST_POS_U64]) // BigInt to Int
+            // -- const len = parseInt(uint64[HEADER_REQUEST_LEN_U64]) // BigInt to Int
+            // -- const range = new Int32Array(user_uint8.slice(pos,
+            //      Math.min(
+            //         user_uint8.byteLength - 1,
+            //         pos + len - 1
+            //      )
+            //    ).buffer)
+            // -- range.map((int, i) => (int32[SAB.HEADER_REQUEST_BUF_I32 + i] = int))
+            // -- int32[0] = SAB.READY_STATE_REQUEST_COMPLETED;
+            // slice after request position
+            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
+            buffer = new Uint8Array(int32.slice(SAB.HEADER_REQUEST_BUF_I32).buffer);
+            // not sure if there's anything else here to do
+            // the slice will return _something_; should Userland put some kind
+            // of CRC or simple byte count, like the first
+            // or you deadlock the buffer without the timeout
+        } while (retry <= 3 && buffer !== null);
         return buffer;
     }
 }
