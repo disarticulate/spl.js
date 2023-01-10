@@ -25,16 +25,12 @@ const stream_ops_read = (stream, buffer, offset, length, position) => {
         buffer.set(new Uint8Array(ab), offset);
         return chunk.size;
     } else if (stream.node.contents instanceof ShareArrayBuffer) {
-        const sab = new Uint8Array(stream.node.contents)
-        // header:
-        //  -- readyState Uint8Array(1)
-        //  -- length Uint8Array(8)
-        //  -- offset Uint8Array(8)
-        // NO OOP
-        // Expect Uint8Array with 
-        // ? Atomics.wait(stream.node.contents, 0, 255, 100)
-        // read data when stream is ready
-        // ? const data = new Uint8Array(stream.node.contents.slice(1))
+        const data = new Uint8Array(stream.node.sab.read(position, length));
+        if (!data) {
+            throw new Error(`Fetching range from ${stream.node.contents} failed.`);
+        }
+        buffer.set(data, offset);
+        return data.length;
     }
     else {
         const data = new Uint8Array(stream.node.xhr.read(position, length));
@@ -93,7 +89,6 @@ const HEADER_REQUEST_BUF_U64 = 3
 
 class SAB {
     // header:
-    //  -- readyState Uint8Array(8) = BigUint64Array(1) = Int32Array(2)
     static READY_STATE_U64 = READY_STATE_U64 // for BigUint64Array
     static READY_STATE_I32 = READY_STATE_U64 * 2 // STILL zero, today.
     static READY_STATE_REQUEST_COMPLETED = 0 // multiples of 4 = Int32Array(1)
@@ -120,7 +115,7 @@ class SAB {
         this.expected_pos = 0;
         this.prefetch_len = 0;
         this.buffer = new ArrayBuffer();
-        // this.header = new ArrayBuffer();
+        this.header = new ArrayBuffer();
         this.pos = 0;
         this.sab = sab;
     }
@@ -141,26 +136,26 @@ class SAB {
         const int32 = new Int32Array(this.sab);
         
         // should we wait for it to be ready? Is there a race condition?
-        Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
+        Atomics.wait(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
         // should we zero out the len prior to request? or Reset buffer?
         // this.zeroLen(int32)
         this.reset(int32);
         // userLand should be preaped:
         // -- https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
-        // -- const { async, value } = Atomics.waitAsync(int32, 0, SAB.READY_STATE_REQUEST_SIZE)
-        int32[0] = SAB.READY_STATE_REQUEST_SIZE;
+        // -- const { async, value } = Atomics.waitAsync(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_SIZE)
+        int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_SIZE;
         // userLand should reply:
         // -- const int32 = new Int32Array(sab);
         // -- const size = new Int32Array(new BigUint64Array([BigInt(...fileSize...)]).buffer)
         // -- size.map((int, i) => (int32[SAB.HEADER_REQUEST_LEN_I32 + i] = int))
-        // -- int32[0] = SAB.READY_STATE_REQUEST_COMPLETED
+        // -- int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_COMPLETED
         // this is blocking the thread in the worker
          do {
             retry += 1;
             // now get the size from the SAB.
             // NOTE: We're reusing the length space of the header
             // as we have a clear signal request: SAB.READY_STATE_REQUEST_SIZE
-            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
+            Atomics.wait(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
             // we can probably reuse the int32; not sure it matters?
             // this just reads clearer.
             const uint64 = new BigUint64Array(this.sab);
@@ -190,10 +185,10 @@ class SAB {
             // mapping the requested pos & len
             posIntI32.map((int, i) => (int32[SAB.HEADER_REQUEST_POS_I32 + i] = int));
             lenIntI32.map((int, i) => (int32[SAB.HEADER_REQUEST_LEN_I32 + i] = int));
-            int32[0] = SAB.READY_STATE_REQUEST_RANGE;
+            int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_RANGE;
             // Userland:
             // -- const int32 = new Int32Array(sab);
-            // -- const { async, value } = Atomics.waitAsync(int32, 0, SAB.READY_STATE_REQUEST_RANGE)
+            // -- const { async, value } = Atomics.waitAsync(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_RANGE)
             // -- const uint64 = new BigUint64Array(int32.buffer)
             // -- const pos = parseInt(uint64[HEADER_REQUEST_POS_U64]) // BigInt to Int
             // -- const len = parseInt(uint64[HEADER_REQUEST_LEN_U64]) // BigInt to Int
@@ -204,16 +199,58 @@ class SAB {
             //      )
             //    ).buffer)
             // -- range.map((int, i) => (int32[SAB.HEADER_REQUEST_BUF_I32 + i] = int))
-            // -- int32[0] = SAB.READY_STATE_REQUEST_COMPLETED;
+            // -- int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_COMPLETED;
             // slice after request position
-            Atomics.wait(int32, 0, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
+            Atomics.wait(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
             buffer = new Uint8Array(int32.slice(SAB.HEADER_REQUEST_BUF_I32).buffer);
             // not sure if there's anything else here to do
             // the slice will return _something_; should Userland put some kind
-            // of CRC or simple byte count, like the first
+            // of CRC or simple byte sum count, like the first
             // or you deadlock the buffer without the timeout
         } while (retry <= 3 && buffer !== null);
         return buffer;
+    }
+    fromHeader(pos, len) {
+        if (this.header.byteLength) {
+            return this.header.slice(pos, pos + len);
+        }
+        return null
+    }
+
+    fromBuffer(pos, len) {
+        const start = pos - this.pos;
+        if (start >= 0 && pos + len <= this.pos + this.buffer.byteLength) {
+            return this.buffer.slice(start, start + len);
+        }
+        return null
+    }
+    read(pos, len) {
+        if (pos + len <= 100) {
+            let buffer = this.fromHeader(pos, len);
+            if (buffer) {
+                return buffer;
+            }
+            this.header = this.fetch(0, 100);
+            return this.fromHeader(pos, len);
+        }
+        let buffer = this.fromBuffer(pos, len);
+        if (buffer) {
+            return buffer;
+        }
+        // https://github.com/jvail/spl.js/issues/13
+        // The idea is that the more consecutive pages are read by sqlite
+        // the higher the likelihood it will continue to read consecutive pages:
+        // Then increase no. pages pre-fetched.
+        if (pos === this.expected_pos) {
+            this.prefetch_len = Math.min(len * 256, 2 * (this.prefetch_len ? this.prefetch_len : len));
+        } else {
+            this.prefetch_len = len;
+        }
+        this.expected_pos = pos + this.prefetch_len;
+
+        this.buffer = this.fetch(pos, this.prefetch_len);
+        this.pos = pos;
+        return this.fromBuffer(pos, len);
     }
 }
 
