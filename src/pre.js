@@ -144,6 +144,7 @@ class SAB {
         // -- https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync
         // -- const { async, value } = Atomics.waitAsync(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_SIZE)
         int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_SIZE;
+        Atomics.notify(int32, SAB.READY_STATE_I32)
         // userLand should reply:
         // -- const int32 = new Int32Array(sab);
         // -- const size = new Int32Array(new BigUint64Array([BigInt(...fileSize...)]).buffer)
@@ -186,6 +187,7 @@ class SAB {
             posIntI32.map((int, i) => (int32[SAB.HEADER_REQUEST_POS_I32 + i] = int));
             lenIntI32.map((int, i) => (int32[SAB.HEADER_REQUEST_LEN_I32 + i] = int));
             int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_RANGE;
+            Atomics.notify(int32, SAB.READY_STATE_I32)
             // Userland:
             // -- const int32 = new Int32Array(sab);
             // -- const { async, value } = Atomics.waitAsync(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_RANGE)
@@ -200,6 +202,7 @@ class SAB {
             //    ).buffer)
             // -- range.map((int, i) => (int32[SAB.HEADER_REQUEST_BUF_I32 + i] = int))
             // -- int32[SAB.READY_STATE_I32] = SAB.READY_STATE_REQUEST_COMPLETED;
+            // -- Atomics.notify(int32, SAB.READY_STATE_I32)
             // slice after request position
             Atomics.wait(int32, SAB.READY_STATE_I32, SAB.READY_STATE_REQUEST_COMPLETED, this.timeout);
             buffer = new Uint8Array(int32.slice(SAB.HEADER_REQUEST_BUF_I32).buffer);
