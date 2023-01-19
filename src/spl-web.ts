@@ -93,7 +93,7 @@ const spl = function (wkr: Worker, exs=[]): ISPL {
         return this;
     }
 
-    this.db = function(sqlite3?: string | ArrayBuffer): IDB {
+    this.db = function(sqlite3?: string | ArrayBuffer | SharedArrayBuffer): IDB {
 
         // @ts-ignore
         if (!new.target) return new this.db(sqlite3);
